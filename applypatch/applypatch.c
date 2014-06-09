@@ -63,7 +63,7 @@ int LoadFileContents(const char* filename, FileContents* file,
 
     if (stat(filename, &file->st) != 0) {
         printf("failed to stat \"%s\": %s\n", filename, strerror(errno));
-        return (errno == ENOENT ? -ENOENT : -1);
+        return -1;
     }
 
     file->size = file->st.st_size;
@@ -424,7 +424,7 @@ int WriteToPartition(unsigned char* data, size_t len,
         {
             size_t start = 0;
             int success = 0;
-            int fd = open(partition, O_RDWR);
+            int fd = open(partition, O_RDWR | O_SYNC);
             if (fd < 0) {
                 printf("failed to open %s: %s\n", partition, strerror(errno));
                 return -1;
@@ -433,7 +433,7 @@ int WriteToPartition(unsigned char* data, size_t len,
 
             for (attempt = 0; attempt < 10; ++attempt) {
                 size_t next_sync = start + (1<<20);
-                printf("raw write %s attempt %d start at %d\n", partition, attempt+1, start);
+                printf("raw O_SYNC write %s attempt %d start at %d\n", partition, attempt+1, start);
                 lseek(fd, start, SEEK_SET);
                 while (start < len) {
                     size_t to_write = len - start;
@@ -591,12 +591,7 @@ int applypatch_check(const char* filename,
     // LoadFileContents is successful.  (Useful for reading
     // partitions, where the filename encodes the sha1s; no need to
     // check them twice.)
-    int filestate = LoadFileContents(filename, &file, RETOUCH_DO_MASK);
-    if (filestate == -ENOENT) {
-        return -ENOENT;
-    }
-
-    if (filestate != 0 ||
+    if (LoadFileContents(filename, &file, RETOUCH_DO_MASK) != 0 ||
         (num_patches > 0 &&
          FindMatchingPatch(file.sha1, patch_sha1_str, num_patches) < 0)) {
         printf("file \"%s\" doesn't have any of expected "
@@ -683,6 +678,14 @@ int CacheSizeCheck(size_t bytes) {
     }
 }
 
+static void print_short_sha1(const uint8_t sha1[SHA_DIGEST_SIZE]) {
+    int i;
+    const char* hex = "0123456789abcdef";
+    for (i = 0; i < 4; ++i) {
+        putchar(hex[(sha1[i]>>4) & 0xf]);
+        putchar(hex[sha1[i] & 0xf]);
+    }
+}
 
 // This function applies binary patches to files in a way that is safe
 // (the original file is not touched until we have the desired
@@ -718,7 +721,7 @@ int applypatch(const char* source_filename,
                char** const patch_sha1_str,
                Value** patch_data,
                Value* bonus_data) {
-    printf("\napplying patch to %s\n", source_filename);
+    printf("patch %s: ", source_filename);
 
     if (target_filename[0] == '-' &&
         target_filename[1] == '\0') {
@@ -744,8 +747,9 @@ int applypatch(const char* source_filename,
         if (memcmp(source_file.sha1, target_sha1, SHA_DIGEST_SIZE) == 0) {
             // The early-exit case:  the patch was already applied, this file
             // has the desired hash, nothing for us to do.
-            printf("\"%s\" is already target; no patch needed\n",
-                   target_filename);
+            printf("already ");
+            print_short_sha1(target_sha1);
+            putchar('\n');
             free(source_file.data);
             return 0;
         }
@@ -867,8 +871,10 @@ static int GenerateTarget(FileContents* source_file,
                 enough_space =
                     (free_space > (256 << 10)) &&          // 256k (two-block) minimum
                     (free_space > (target_size * 3 / 2));  // 50% margin of error
-                printf("target %ld bytes; free space %ld bytes; retry %d; enough %d\n",
-                       (long)target_size, (long)free_space, retry, enough_space);
+                if (!enough_space) {
+                    printf("target %ld bytes; free space %ld bytes; retry %d; enough %d\n",
+                           (long)target_size, (long)free_space, retry, enough_space);
+                }
             }
 
             if (!enough_space) {
@@ -903,7 +909,7 @@ static int GenerateTarget(FileContents* source_file,
                 unlink(source_filename);
 
                 size_t free_space = FreeSpaceForFile(target_fs);
-                printf("(now %ld bytes free for target)\n", (long)free_space);
+                printf("(now %ld bytes free for target) ", (long)free_space);
             }
         }
 
@@ -999,6 +1005,10 @@ static int GenerateTarget(FileContents* source_file,
     if (memcmp(current_target_sha1, target_sha1, SHA_DIGEST_SIZE) != 0) {
         printf("patch did not produce expected sha1\n");
         return 1;
+    } else {
+        printf("now ");
+        print_short_sha1(target_sha1);
+        putchar('\n');
     }
 
     if (output < 0) {

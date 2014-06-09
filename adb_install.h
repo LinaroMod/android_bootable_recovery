@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
+#ifndef _ADB_INSTALL_H
+#define _ADB_INSTALL_H
 
+//class RecoveryUI;
 
-int apply_from_adb();
+int apply_from_adb(const char* install_file);
 
+#endif
